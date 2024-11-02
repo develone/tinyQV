@@ -1,0 +1,34 @@
+11/02/24
+forked https://github.com/MichaelBell/tinyQV
+created a new branch test-dev
+
+git clone https://github.com/develone/tinyQV.git -b test-dev
+
+devel@pi5-80:~/tinyQV $ cd pico_ice/
+devel@pi5-80:~/tinyQV/pico_ice $ ls
+Makefile  micropython  nextpnr.sh  pico_ice.pcf  pico_ice.v
+devel@pi5-80:~/tinyQV/pico_ice $ make
+# Lint
+#verilator --lint-only -Wall -Wno-DECLFILENAME -Wno-MULTITOP pico_ice.v ../cpu/*.v ../peri/uart/*.v ../peri/spi/*.v ../peri/pwm/*.v
+# synthesize using Yosys
+yosys -p "synth_ice40 -abc9 -device u -top tinyQV_top -json tinyqv.json" -DICE40 pico_ice.v ../cpu/*.v ../peri/uart/*.v ../peri/spi/*.v ../peri/pwm/*.v > yosys.log
+Warning: Replacing memory \registers with list of registers. See ../cpu/register.v:44
+ABC: Warning: The network is combinational.
+Warnings: 1 unique messages, 1 total
+   Number of cells:               3289
+     SB_DFF*                      1048
+     SB_LUT4                      2065
+
+# Place and route using nextpnr
+./nextpnr.sh -r --up5k --json tinyqv.json --package sg48 --asc tinyqv.asc --opt-timing --pcf pico_ice.pcf
+Info: Max frequency for clock 'clk$SB_IO_IN_$glb_clk': 15.30 MHz (PASS at 14.00 MHz)
+
+# Convert to bitstream using IcePack
+icepack tinyqv.asc tinyqv.bin
+bin2uf2 -o tinyqv.uf2 0x00000000 tinyqv.bin
+addr=0x00000000 file=tinyqv.bin
+
+cdcd_control_xfer_cb: coding=200014B2 itf=0
+tud_cdc_line_coding_cb: coding=200014B2 baud=115200
+vpico-ice-sdk v1.6.1
+pico-ice>
