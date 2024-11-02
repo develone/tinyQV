@@ -32,3 +32,14 @@ cdcd_control_xfer_cb: coding=200014B2 itf=0
 tud_cdc_line_coding_cb: coding=200014B2 baud=115200
 vpico-ice-sdk v1.6.1
 pico-ice>
+
+forked https://github.com/MichaelBell/nanoV
+created a new branch test-dev
+
+git clone https://github.com/develone/nanoV.git -b test-dev
+
+cd nanoV/pico_ice/
+
+make
+
+cp nanoV.uf2 /media/devel/pico-ice/
