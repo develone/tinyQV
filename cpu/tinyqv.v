@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-`define default_netname none
+`default_nettype none
 
 // TinyQV CPU and QSPI memory controller wrapper
 module tinyQV (
@@ -14,6 +14,7 @@ module tinyQV (
     output [27:0] data_addr,
     output  [1:0] data_write_n, // 11 = no write, 00 = 8-bits, 01 = 16-bits, 10 = 32-bits
     output  [1:0] data_read_n,  // 11 = no read,  00 = 8-bits, 01 = 16-bits, 10 = 32-bits
+    output        data_read_complete,
     output [31:0] data_out,    
 
     input         data_ready,  // Transaction complete/data request can be modified.
@@ -21,6 +22,7 @@ module tinyQV (
 
     // Interrupt requests: Bottom 2 bits trigger on rising edge, next two are a status
     input   [3:0] interrupt_req,
+    input         timer_interrupt,
 
     // External SPI interface
     input   [3:0] spi_data_in,
@@ -32,6 +34,7 @@ module tinyQV (
     output        spi_ram_a_select,
     output        spi_ram_b_select,
 
+    // Debug
     output        debug_instr_complete,
     output        debug_instr_ready,
     output        debug_instr_valid,
@@ -60,6 +63,7 @@ module tinyQV (
   wire [27:0] qv_data_addr;
   wire  [1:0] qv_data_write_n;
   wire  [1:0] qv_data_read_n;
+  wire        qv_data_read_complete;
   wire [31:0] qv_data_to_write;
   wire        qv_data_ready;
   wire [31:0] qv_data_from_read;
@@ -77,8 +81,9 @@ module tinyQV (
   assign mem_data_read_n =  is_mem ? qv_data_read_n  : 2'b11;
 
   assign data_addr = qv_data_addr;
-  assign data_write_n =    !is_mem ? qv_data_write_n : 2'b11;
-  assign data_read_n =     !is_mem ? qv_data_read_n  : 2'b11;
+  assign data_write_n =       !is_mem ? qv_data_write_n       : 2'b11;
+  assign data_read_n =        !is_mem ? qv_data_read_n        : 2'b11;
+  assign data_read_complete = !is_mem ? qv_data_read_complete : 0;
   assign data_out = qv_data_to_write;
 
   // Use a positive edge triggered reset for the CPU, to improve timing
@@ -100,10 +105,12 @@ module tinyQV (
         .instr_ready(instr_ready),
 
         .interrupt_req(interrupt_req),
+        .timer_interrupt(timer_interrupt),
 
         .data_addr(qv_data_addr),
         .data_write_n(qv_data_write_n),
         .data_read_n(qv_data_read_n),
+        .data_read_complete(qv_data_read_complete),
         .data_out(qv_data_to_write),
         .data_continue(qv_data_continue),
 

@@ -17,10 +17,12 @@ module tinyqv_cpu #(parameter NUM_REGS=16, parameter REG_ADDR_BITS=4) (
     input         instr_ready,
 
     input  [3:0]  interrupt_req,
+    input         timer_interrupt,
 
     output reg [27:0] data_addr,
     output reg [1:0]  data_write_n, // 11 = no write, 00 = 8-bits, 01 = 16-bits, 10 = 32-bits
     output reg [1:0]  data_read_n,  // 11 = no read,  00 = 8-bits, 01 = 16-bits, 10 = 32-bits
+    output            data_read_complete,
     output reg [31:0] data_out,
 
     output reg    data_continue,
@@ -68,30 +70,31 @@ module tinyqv_cpu #(parameter NUM_REGS=16, parameter REG_ADDR_BITS=4) (
     wire mem_op_increment_reg_de;
 
     tinyqv_decoder i_decoder(
-        instr, 
-        imm_de,
+        .instr(instr),
+        .imm(imm_de),
 
-        is_load_de,
-        is_alu_imm_de,
-        is_auipc_de,
-        is_store_de,
-        is_alu_reg_de,
-        is_lui_de,
-        is_branch_de,
-        is_jalr_de,
-        is_jal_de,
-        is_ret_de,
-        is_system_de,
+        .is_load(is_load_de),
+        .is_alu_imm(is_alu_imm_de),
+        .is_auipc(is_auipc_de),
+        .is_store(is_store_de),
+        .is_alu_reg(is_alu_reg_de),
+        .is_lui(is_lui_de),
+        .is_branch(is_branch_de),
+        .is_jalr(is_jalr_de),
+        .is_jal(is_jal_de),
+        .is_ret(is_ret_de),
+        .is_system(is_system_de),
 
-        instr_len_de,
-        alu_op_de,  // See tinyqv_alu for format
-        mem_op_de,
+        .instr_len(instr_len_de),
+        .alu_op(alu_op_de),  // See tinyqv_alu for format
+        .mem_op(mem_op_de),
 
-        rs1_de,
-        rs2_de,
-        rd_de,
-        additional_mem_ops_de,
-        mem_op_increment_reg_de);
+        .rs1(rs1_de),
+        .rs2(rs2_de),
+        .rd(rd_de),
+        .additional_mem_ops(additional_mem_ops_de),
+        .mem_op_increment_reg(mem_op_increment_reg_de)
+    );
 
     reg [31:0] imm;
 
@@ -215,27 +218,32 @@ module tinyqv_cpu #(parameter NUM_REGS=16, parameter REG_ADDR_BITS=4) (
 
     wire [3:0] data_out_slice;
     reg data_ready_latch;
-    reg data_ready_core;
+    reg data_ready_sync;
+    wire data_ready_core;
     always @(posedge clk) begin
         if (!rstn) begin
             counter_hi <= 0;
-            data_ready_core <= 0;
+            data_ready_sync <= 0;
             data_ready_latch <= 0;
         end else begin
             counter_hi <= counter_hi + 1;
 
-            if (counter_hi == 3'd7) begin
+            if (counter_hi == 3'd0) begin
                 data_ready_latch <= 0;
                 if (data_ready || data_ready_latch) begin
-                    data_ready_core <= 1;
+                    data_ready_sync <= 1;
                 end else begin
-                    data_ready_core <= 0;
+                    data_ready_sync <= 0;
                 end
             end else if (!data_ready_latch) begin
                 data_ready_latch <= data_ready;
+            end else if (address_ready) begin
+                data_ready_latch <= 0;
             end
         end
     end
+
+    assign data_ready_core = (counter_hi == 3'd0) ? (data_ready || data_ready_latch) : data_ready_sync;
 
     always @(posedge clk) begin
         if (!rstn) begin
@@ -277,9 +285,12 @@ module tinyqv_cpu #(parameter NUM_REGS=16, parameter REG_ADDR_BITS=4) (
             load_started <= 0;
         end
     end
+    assign data_read_complete = is_load && instr_complete_core && !stall_core;
 
     always @(posedge clk) begin
-        if (is_store && no_write_in_progress) begin
+        if (!rstn) begin
+            data_out <= 0;
+        end else if (is_store && no_write_in_progress) begin
             data_out[counter+:4] <= data_out_slice;
         end
     end
@@ -292,51 +303,52 @@ module tinyqv_cpu #(parameter NUM_REGS=16, parameter REG_ADDR_BITS=4) (
     end
 
     tinyqv_core #(.REG_ADDR_BITS(REG_ADDR_BITS), .NUM_REGS(NUM_REGS))  i_core(
-        clk,
-        rstn,
+        .clk(clk),
+        .rstn(rstn),
         
-        imm[counter+:4],
-        imm[11:0],
+        .imm(imm[counter+:4]),
+        .imm_lo(imm[11:0]),
 
-        is_load && instr_valid && no_write_in_progress,
-        is_alu_imm && instr_valid,
-        is_auipc && instr_valid,
-        is_store && instr_valid && no_write_in_progress,
-        is_alu_reg && instr_valid,
-        is_lui && instr_valid,
-        is_branch && instr_valid,
-        is_jalr && instr_valid,
-        is_jal && instr_valid,
-        is_system && instr_valid,
-        interrupt_core,
-        stall_core && !interrupt_core,
+        .is_load(is_load && instr_valid && no_write_in_progress),
+        .is_alu_imm(is_alu_imm && instr_valid),
+        .is_auipc(is_auipc && instr_valid),
+        .is_store(is_store && instr_valid && no_write_in_progress),
+        .is_alu_reg(is_alu_reg && instr_valid),
+        .is_lui(is_lui && instr_valid),
+        .is_branch(is_branch && instr_valid),
+        .is_jalr(is_jalr && instr_valid),
+        .is_jal(is_jal && instr_valid),
+        .is_system(is_system && instr_valid),
+        .is_interrupt(interrupt_core),
+        .is_stall(stall_core && !interrupt_core),
 
-        alu_op,
-        mem_op,
+        .alu_op(alu_op),
+        .mem_op(mem_op),
 
-        rs1,
-        rs2,
-        rd,
+        .rs1(rs1),
+        .rs2(rs2),
+        .rd(rd),
 
-        counter[4:2],
-        pc[counter+:4],
-        next_pc_for_core[counter+:4],
-        data_in[counter+:4],
-        data_ready_core,
+        .counter(counter[4:2]),
+        .pc(pc[counter+:4]),
+        .next_pc(next_pc_for_core[counter+:4]),
+        .data_in(data_in[counter+:4]),
+        .load_data_ready(data_ready_core),
 
-        data_out_slice,
-        addr_out,
-        address_ready,
-        instr_complete_core,
-        branch,
-        return_addr,
+        .data_out(data_out_slice),
+        .addr_out(addr_out),
+        .address_ready(address_ready),
+        .instr_complete(instr_complete_core),
+        .branch(branch),
+        .return_addr(return_addr),
 
-        interrupt_req,
-        interrupt_pending,
+        .interrupt_req(interrupt_req),
+        .timer_interrupt(timer_interrupt),
+        .interrupt_pending(interrupt_pending),
 
-        debug_reg_wen,
-        debug_rd
-        );
+        .debug_reg_wen(debug_reg_wen),
+        .debug_rd(debug_rd)
+    );
 
     /////// Instruction fetch ///////
 

@@ -6,13 +6,13 @@ The aim of this design is to make a small microcontroller that is as fast as pra
 
 ## Overview
 
-RV32EC + a 32x16-bit multiplier
+RV32EC, Zcb, Zicond + a 32x16-bit multiplier
 
-Basic interrupt support  (not yet implemented)
+Basic interrupt support
 
 QSPI flash/memory interface.  This uses a shared bus as I didn't think it was worth dedicating the pins to allow two completely separate interfaces (that would make load/store to RAM much faster, but adds complexity and we run out of outputs).
 
-Peripherals so it can do basic microcontroller things, currently 1 UART and 1 SPI master, plus some GPIOs.
+Peripherals so it can do basic microcontroller things, currently 1 UART, 1 SPI controller and a single PWM channel, plus some GPIOs.
 
 ### QPSI PMOD
 
@@ -61,9 +61,9 @@ CSRs:
 - MSTATUS - Only MIE and MPIE implemented, plus a non-standard trap enable bit at bit 2.
 - MISA - read only
 - MTVEC - not implemented and non-standard behaviour.  On reset pc is set to 0x0, traps set pc to 0x4, interrupts to 0x8
-- MIE & MIP - Custom interrupts only to give granularity, might implement MTI if there's room for a timer.  Custom interrupts:
+- MIE & MIP - Custom interrupts only to give granularity, plus MTI.  Custom interrupts:
 ```
-    16 - triggered on rising edge of in0 (cleared by clearing bit in MIP)
+	16 - triggered on rising edge of in0 (cleared by clearing bit in MIP)
 	17 - triggered on rising edge of in1 (cleared by clearing bit in MIP)
 	18 - UART byte available  (cleared by reading byte from UART)
 	19 - UART writeable  (cleared by writing byte to UART)
@@ -130,8 +130,8 @@ Note that instruction fetch is only capable of reading 16-bits per cycle, so 1 c
 | SLT         | 2      |
 | Shifts      | 2      |
 | Mul (32x16) | 2      |
-| CZERO (condition false) | 1 |
-| CZERO (condition true) | 2 |
+| CZERO (condition true) | 1 |
+| CZERO (condition false) | 2 |
 | JAL         | 5      |
 | RET         | 5      |
 | Other JALR  | 6      |
@@ -139,7 +139,7 @@ Note that instruction fetch is only capable of reading 16-bits per cycle, so 1 c
 | Branch (taken) | 7   |
 | Store to peripheral   | 1 | 
 | Store to PSRAM        | ~5    |
-| Load from peripheral  | 3 |
+| Load from peripheral  | 2 |
 | Load from flash/PSRAM | ~7    |
 
 ## FPGA testing

@@ -4,6 +4,9 @@
    A QSPI controller for the QSPI PMOD:
      https://github.com/mole99/qspi-pmod
    
+   Expects the PSRAMs to be in QSPI mode and the flash to be in fast read quad I/O (EBh)
+   continuous read mode.
+
    To start reading:
    - Set addr_in and set start_read high for 1 cycle
    - Data is available on data_out on each cycle that data_ready is high
@@ -24,11 +27,9 @@
    out of reset to ensure the configuration is not accidentally modified.
    Note that tinyQV's reset is latched on the negative edge of clk, so reset must be 
    released while clock is high.
-   Valid values of latency are 0 - 5:
-   - 0: data is ready by the falling edge of the SPI clock immediately following the
-           last dummy cycle
-   - 1: data is ready by the rising edge of the next SPI clock (this is "normal")
-   - 2-5: read the data delayed by further half SPI clock cycles. 
+   Valid values of latency are 1 - 3:
+   - 1: data is ready on the rising edge of the next SPI clock (this is "normal")
+   - 2-3: read the data delayed by further half SPI clock cycles. 
 
    */
 module qspi_controller (
@@ -39,7 +40,7 @@ module qspi_controller (
     input      [3:0] spi_data_in,
     output reg [3:0] spi_data_out,
     output reg [3:0] spi_data_oe,
-    output reg       spi_clk_out,
+    output           spi_clk_out,
 
     output reg       spi_flash_select,
     output reg       spi_ram_a_select,
@@ -83,14 +84,17 @@ module qspi_controller (
     reg [ADDR_BITS-1:0]       addr;
     reg [DATA_WIDTH_BITS-1:0] data;
     reg [2:0] nibbles_remaining;
-    reg [2:0] delay_cycles_cfg;
-    reg [7:0] spi_in_buffer;
+    reg [1:0] delay_cycles_cfg;
+    reg       spi_clk_use_neg;
+    reg       spi_clk_pos;
+    reg       spi_clk_neg;
+    reg [3:0] spi_in_buffer;
 
     assign data_out = data;
     assign busy = fsm_state != FSM_IDLE;
 
     reg stop_txn_reg;
-    wire stop_txn_now = stop_txn_reg || (stop_txn && (!is_writing || spi_clk_out));
+    wire stop_txn_now = stop_txn_reg || (stop_txn && (!is_writing || spi_clk_pos));
     always @(posedge clk) begin
         if (!rstn) 
             stop_txn_reg <= 0;
@@ -98,7 +102,7 @@ module qspi_controller (
             stop_txn_reg <= stop_txn && !stop_txn_now;
     end
 
-    reg [2:0] read_cycles_count;
+    reg [1:0] read_cycles_count;
 
     reg last_ram_a_sel;
     reg last_ram_b_sel;
@@ -107,7 +111,8 @@ module qspi_controller (
 
     always @(posedge clk) begin
         if (!rstn) begin
-            delay_cycles_cfg <= spi_data_in[2:0];
+            delay_cycles_cfg <= spi_data_in[1:0];
+            spi_clk_use_neg <= spi_data_in[2];
         end
     end
 
@@ -120,7 +125,7 @@ module qspi_controller (
             is_writing <= 0;
             nibbles_remaining <= 0;
             data_ready <= 0;
-            spi_clk_out <= 0;
+            spi_clk_pos <= 0;
             spi_data_oe <= 4'b0000;
             spi_flash_select <= 1;
             spi_ram_a_select <= 1;
@@ -135,37 +140,37 @@ module qspi_controller (
                     is_writing <= !start_read && addr_in[24];  // Only writes to RAM supported.
                     nibbles_remaining <= addr_in[24] ? 2-1 : 6-1;
                     spi_data_oe <= 4'b1111;
-                    spi_clk_out <= 0;
+                    spi_clk_pos <= 0;
                     spi_flash_select <= addr_in[24];
                     spi_ram_a_select <= addr_in[24:23] != 2'b10;
                     spi_ram_b_select <= addr_in[24:23] != 2'b11;
                 end
             end else begin
-                if (read_cycles_count == 0) read_cycles_count <= 3'b001;
-                else read_cycles_count <= read_cycles_count - 3'b001;
+                if (read_cycles_count == 0) read_cycles_count <= 2'b01;
+                else read_cycles_count <= read_cycles_count - 2'b01;
 
                 if (fsm_state == FSM_STALLED) begin
-                    spi_clk_out <= 0;
-                    if (!stall_txn && read_cycles_count < 3'b010) begin
+                    spi_clk_pos <= 0;
+                    if (!stall_txn && !read_cycles_count[1]) begin
                         data_ready <= !is_writing;
                         if (is_writing) begin
                             fsm_state <= FSM_DATA;
-                            read_cycles_count <= 3'b000;
+                            read_cycles_count <= 2'b00;
                         end else begin
-                            fsm_state <= (delay_cycles_cfg[2:1] == 2'b00) ? FSM_DATA : FSM_STALL_RECOVER;
-                            read_cycles_count <= {1'b0, delay_cycles_cfg[2], delay_cycles_cfg[0]};
+                            fsm_state <= (delay_cycles_cfg[1] == 0) ? FSM_DATA : FSM_STALL_RECOVER;
+                            read_cycles_count <= {1'b0, delay_cycles_cfg[0]};
                         end
                     end
                 end else begin
-                    spi_clk_out <= !spi_clk_out;
-                    if (((fsm_state == FSM_DATA && !is_writing) || fsm_state == FSM_STALL_RECOVER) ? (read_cycles_count == 0) : spi_clk_out) begin
-                        if (nibbles_remaining == 0 || (fsm_state == FSM_STALL_RECOVER && delay_cycles_cfg[2])) begin
+                    spi_clk_pos <= !spi_clk_pos;
+                    if (((fsm_state == FSM_DATA && !is_writing) || fsm_state == FSM_STALL_RECOVER) ? (read_cycles_count == 0) : spi_clk_pos) begin
+                        if (nibbles_remaining == 0) begin
                             if (fsm_state == FSM_DATA || fsm_state == FSM_STALL_RECOVER) begin
                                 data_ready <= !is_writing && !stall_txn;
                                 nibbles_remaining <= (DATA_WIDTH_BITS >> 2)-1;
                                 if (stall_txn) begin
                                     fsm_state <= FSM_STALLED;
-                                    read_cycles_count <= delay_cycles_cfg | 3'b001;
+                                    read_cycles_count <= delay_cycles_cfg | 2'b01;
                                 end else begin
                                     fsm_state <= FSM_DATA;
                                 end
@@ -213,7 +218,7 @@ module qspi_controller (
     always @(posedge clk) begin
         if (fsm_state == FSM_IDLE && (start_read || start_write)) begin
             addr <= addr_in[23:0];
-        end else if (fsm_state == FSM_ADDR && spi_clk_out) begin
+        end else if (fsm_state == FSM_ADDR && spi_clk_pos) begin
             addr <= {addr[ADDR_BITS-5:0], 4'b0000};
         end
     end
@@ -222,7 +227,7 @@ module qspi_controller (
         if (is_writing) begin
             if (fsm_state == FSM_STALLED) begin
                 data <= data_in;
-            end else if (spi_clk_out) begin
+            end else if (spi_clk_pos) begin
                 if (nibbles_remaining == 0) begin
                     data <= data_in;
                 end else if (fsm_state == FSM_DATA) begin
@@ -231,12 +236,10 @@ module qspi_controller (
             end
         end else if (read_cycles_count == 0 && fsm_state == FSM_DATA) begin
             data <= {data[DATA_WIDTH_BITS-5:0], spi_data_in};
-        end else if (read_cycles_count == 3'b010 && fsm_state == FSM_STALL_RECOVER) begin
-            data <= {data[DATA_WIDTH_BITS-5:0], spi_in_buffer[7:4]};
         end else if (read_cycles_count == 0 && fsm_state == FSM_STALL_RECOVER) begin
-            data <= {data[DATA_WIDTH_BITS-5:0], spi_in_buffer[3:0]};
-        end else if (read_cycles_count[2:1] != 2'b00 && read_cycles_count[0] == 1'b0 && fsm_state == FSM_STALLED) begin
-            spi_in_buffer <= {spi_in_buffer[3:0], spi_data_in};
+            data <= {data[DATA_WIDTH_BITS-5:0], spi_in_buffer};
+        end else if (read_cycles_count == 2'b10 && fsm_state == FSM_STALLED) begin
+            spi_in_buffer <= spi_data_in;
         end
     end
 
@@ -259,7 +262,7 @@ module qspi_controller (
             end
             FSM_ADDR:   spi_data_out = addr[ADDR_BITS-1:ADDR_BITS-4];
             FSM_DUMMY1: spi_data_out = 4'b1010;
-            FSM_DATA:   spi_data_out = data[DATA_WIDTH_BITS-1:DATA_WIDTH_BITS-4];
+            FSM_DATA:   spi_data_out = is_writing ? data[DATA_WIDTH_BITS-1:DATA_WIDTH_BITS-4] : 4'b1111;
             default:    spi_data_out = 4'b1010;
         endcase
     end
@@ -275,6 +278,13 @@ module qspi_controller (
         end
     end
 
+    // SPI clock output
+    `ifdef FORMAL
+    assign spi_clk_out = spi_clk_pos;
+    `else
+    always @(negedge clk) spi_clk_neg <= spi_clk_pos;
+    assign spi_clk_out = spi_clk_use_neg ? spi_clk_neg : spi_clk_pos;
+    `endif
 
     `ifdef FORMAL
     // register for knowing if we have just started
@@ -328,25 +338,25 @@ module qspi_controller (
             assert($past(stall_txn));
 
         // No positive clock edges when stalled
-        if (f_past_valid == 2'b11 && $past(fsm_state == FSM_STALLED) && busy && $past(!spi_clk_out))
-            assert(!spi_clk_out);
+        if (f_past_valid == 2'b11 && $past(fsm_state == FSM_STALLED) && busy && $past(!spi_clk_pos))
+            assert(!spi_clk_pos);
 
         // SPI Clock runs while transaction in progress and not stalled
         if (f_past_valid == 2'b11 && busy && fsm_state != FSM_STALLED && $past(fsm_state != FSM_IDLE && fsm_state != FSM_STALLED))
-            assert(spi_clk_out != $past(spi_clk_out));
+            assert(spi_clk_pos != $past(spi_clk_pos));
 
         // Data doesn't change over rising edge of clock
-        if (f_past_valid && $past(busy) && busy && $past(!spi_clk_out) && spi_clk_out && ($past(spi_data_oe) || spi_data_oe))
+        if (f_past_valid && $past(busy) && busy && $past(!spi_clk_pos) && spi_clk_pos && ($past(spi_data_oe) || spi_data_oe))
             assert(spi_data_out == $past(spi_data_out));
 
         // Stopping works
         if (f_past_valid && $past(stop_txn && !is_writing)) begin
             assert(spi_flash_select + spi_ram_a_select + spi_ram_b_select == 3);
-            assert(spi_clk_out == 0);
+            assert(spi_clk_pos == 0);
         end
-        if (f_past_valid && $past(stop_txn && is_writing && spi_clk_out)) begin
+        if (f_past_valid && $past(stop_txn && is_writing && spi_clk_pos)) begin
             assert(spi_flash_select + spi_ram_a_select + spi_ram_b_select == 3);
-            assert(spi_clk_out == 0);
+            assert(spi_clk_pos == 0);
         end
 
         if (!f_any_select) begin
@@ -357,13 +367,14 @@ module qspi_controller (
             if (!data_req) assume(data_in == $past(data_in));
 
             // Data in can only change the correct number of cycles after a falling edge of clock
-            assume(delay_cycles_cfg <= 5);
-            if ((delay_cycles_cfg == 0 && !($past(spi_clk_out) && !spi_clk_out)) ||
-                (delay_cycles_cfg == 1 && !($past(spi_clk_out, 2) && !$past(spi_clk_out))) ||
-                (delay_cycles_cfg == 2 && !($past(spi_clk_out, 3) && !$past(spi_clk_out, 2))) ||
-                (delay_cycles_cfg == 3 && !($past(spi_clk_out, 4) && !$past(spi_clk_out, 3))) ||
-                (delay_cycles_cfg == 4 && !($past(spi_clk_out, 5) && !$past(spi_clk_out, 4))) ||
-                (delay_cycles_cfg == 5 && !($past(spi_clk_out, 6) && !$past(spi_clk_out, 5))))
+            assume(delay_cycles_cfg <= 3);
+            assume(delay_cycles_cfg >= 1);
+            if ((delay_cycles_cfg == 0 && !($past(spi_clk_pos) && !spi_clk_pos)) ||
+                (delay_cycles_cfg == 1 && !($past(spi_clk_pos, 2) && !$past(spi_clk_pos))) ||
+                (delay_cycles_cfg == 2 && !($past(spi_clk_pos, 3) && !$past(spi_clk_pos, 2))) ||
+                (delay_cycles_cfg == 3 && !($past(spi_clk_pos, 4) && !$past(spi_clk_pos, 3))) ||
+                (delay_cycles_cfg == 4 && !($past(spi_clk_pos, 5) && !$past(spi_clk_pos, 4))) ||
+                (delay_cycles_cfg == 5 && !($past(spi_clk_pos, 6) && !$past(spi_clk_pos, 5))))
                     assume($past(spi_data_in) == $past(spi_data_in, 2));
             //else
             //    assume($past(spi_data_in) == $past(spi_data_in, 2) + 4'b0001);
@@ -379,7 +390,7 @@ module qspi_controller (
         if (f_any_select) begin
             f_counter <= 0;
             f_rcv_index <= 12;
-        end else if ($past(!spi_clk_out) && spi_clk_out) begin
+        end else if ($past(!spi_clk_pos) && spi_clk_pos) begin
             f_counter <= f_counter + 1;
             
             if (f_counter < 8 || is_writing) assert(spi_data_oe == 4'hF);
