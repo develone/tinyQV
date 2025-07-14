@@ -1,0 +1,18 @@
+07/14/25
+devel@pi5-80:~ $ git clone https://github.com/develone/tinyQV.git -b test-dev
+devel@pi5-80:~ $ cd tinyQV/pico-ice
+devel@pi5-80:~/tinyQV/pico_ice $ make -f Makefile-OSS
+Info: Program finished normally.
+Info: Max frequency for clock 'clk$SB_IO_IN_$glb_clk': 15.03 MHz (PASS at 14.00 MHz)
+
+# Convert to bitstream using IcePack
+/home/devel/oss-cad-suite//bin/icepack tinyqv.asc tinyqv.bin
+bin2uf2 -o tinyqv.uf2 0x00000000 tinyqv.bin
+addr=0x00000000 file=tinyqv.bin
+devel@pi5-80:~/tinyQV/pico_ice $ cd micropython/
+devel@pi5-80:~/tinyQV/pico_ice/micropython $ . virtp.sh 
+(env) devel@pi5-80:~/tinyQV/pico_ice/micropython $ pip3 install mpremote
+(env) devel@pi5-80:~/tinyQV/pico_ice/micropython $ ls env/bin/
+activate       Activate.ps1  pip3               pyserial-ports  python3.11
+activate.csh   mpremote      pip3.11            python
+activate.fish  pip           pyserial-miniterm  python3
